@@ -241,16 +241,32 @@ class AsistenciaController extends Controller
             $docente = $asistencia->docente;
             if ($docente && $docente->user_id) {
                 $estadoTexto = ucfirst($request->estado);
-                $materiaNombre = $asistencia->horario->grupo->materia->nombre ?? 'N/A';
-                $grupoNumero = $asistencia->horario->grupo->numero_grupo ?? 'N/A';
+                $materiaNombre = $asistencia->horario && $asistencia->horario->grupo && $asistencia->horario->grupo->materia
+                    ? $asistencia->horario->grupo->materia->nombre
+                    : 'N/A';
+                $grupoNumero = $asistencia->horario && $asistencia->horario->grupo
+                    ? $asistencia->horario->grupo->numero_grupo
+                    : 'N/A';
 
-                Notificacion::crear(
+                $notif = Notificacion::crear(
                     'asistencia',
                     'Asistencia registrada',
                     "Tu asistencia ha sido registrada como {$estadoTexto} para {$materiaNombre} - Grupo {$grupoNumero}",
                     $docente->user_id,
                     "/asistencias/{$asistencia->id}"
                 );
+
+                if ($notif) {
+                    Log::info('Notificación de asistencia creada', [
+                        'notificacion_id' => $notif->id,
+                        'docente_id' => $docente->user_id
+                    ]);
+                } else {
+                    Log::warning('No se pudo crear notificación de asistencia', [
+                        'docente_id' => $docente->user_id,
+                        'asistencia_id' => $asistencia->id
+                    ]);
+                }
 
                 // Si hay ausencias repetidas (3 o más en los últimos 7 días), crear alerta
                 $ausenciasRecientes = Asistencia::where('docente_id', $docente->id)
@@ -551,7 +567,8 @@ class AsistenciaController extends Controller
     public function update(Request $request, $id)
     {
         try {
-            $asistencia = Asistencia::findOrFail($id);
+            $asistencia = Asistencia::with(['horario.grupo.materia', 'docente.user'])->findOrFail($id);
+            $estadoAnterior = $asistencia->estado;
 
             $validator = Validator::make($request->all(), [
                 'estado' => 'required|in:presente,ausente,tardanza,justificado',
@@ -571,7 +588,39 @@ class AsistenciaController extends Controller
                 'observaciones' => $request->observaciones
             ]);
 
+            $asistencia->refresh();
             $asistencia->load(['horario.grupo.materia', 'docente.user']);
+
+            // Crear notificación para el docente si cambió el estado
+            if ($estadoAnterior !== $request->estado && $asistencia->docente && $asistencia->docente->user_id) {
+                $estadoTexto = ucfirst($request->estado);
+                $materiaNombre = $asistencia->horario->grupo->materia->nombre ?? 'N/A';
+                $grupoNumero = $asistencia->horario->grupo->numero_grupo ?? 'N/A';
+
+                Notificacion::crear(
+                    'asistencia',
+                    'Asistencia actualizada',
+                    "Tu asistencia ha sido actualizada a {$estadoTexto} para {$materiaNombre} - Grupo {$grupoNumero}",
+                    $asistencia->docente->user_id,
+                    "/asistencias/{$asistencia->id}"
+                );
+            }
+
+            // Notificar al coordinador/admin que actualizó la asistencia
+            if (Auth::user() && Auth::user()->rol !== 'docente') {
+                $docente = $asistencia->docente;
+                if ($docente && $docente->user_id) {
+                    $nombreDocente = $docente->user ? $docente->user->name : 'Docente';
+                    $nombreUsuario = Auth::user()->name;
+                    Notificacion::crear(
+                        'info',
+                        'Asistencia modificada',
+                        "La asistencia de {$nombreDocente} ha sido modificada por {$nombreUsuario}",
+                        Auth::id(),
+                        "/asistencias/{$asistencia->id}"
+                    );
+                }
+            }
 
             return response()->json([
                 'success' => true,
@@ -579,6 +628,11 @@ class AsistenciaController extends Controller
                 'data' => $asistencia
             ]);
         } catch (\Exception $e) {
+            Log::error('Error al actualizar asistencia', [
+                'error' => $e->getMessage(),
+                'asistencia_id' => $id
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al actualizar la asistencia',
@@ -593,14 +647,46 @@ class AsistenciaController extends Controller
     public function destroy($id)
     {
         try {
-            $asistencia = Asistencia::findOrFail($id);
+            $asistencia = Asistencia::with(['horario.grupo.materia', 'docente.user'])->findOrFail($id);
+            $docente = $asistencia->docente;
+            $materiaNombre = $asistencia->horario->grupo->materia->nombre ?? 'N/A';
+            $grupoNumero = $asistencia->horario->grupo->numero_grupo ?? 'N/A';
+
             $asistencia->delete();
+
+            // Notificar al docente
+            if ($docente && $docente->user_id) {
+                Notificacion::crear(
+                    'alerta',
+                    'Asistencia eliminada',
+                    "Tu asistencia para {$materiaNombre} - Grupo {$grupoNumero} ha sido eliminada",
+                    $docente->user_id,
+                    "/asistencias"
+                );
+            }
+
+            // Notificar al coordinador/admin
+            if (Auth::user() && Auth::user()->rol !== 'docente') {
+                $nombreDocente = $docente->user ? $docente->user->name : 'Docente';
+                Notificacion::crear(
+                    'info',
+                    'Asistencia eliminada',
+                    "Has eliminado la asistencia de {$nombreDocente} para {$materiaNombre} - Grupo {$grupoNumero}",
+                    Auth::id(),
+                    "/asistencias"
+                );
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Asistencia eliminada exitosamente'
             ]);
         } catch (\Exception $e) {
+            Log::error('Error al eliminar asistencia', [
+                'error' => $e->getMessage(),
+                'asistencia_id' => $id
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al eliminar la asistencia',

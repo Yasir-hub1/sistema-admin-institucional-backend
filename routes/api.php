@@ -175,45 +175,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Rutas de auditoría
     Route::prefix('auditoria')->middleware('role:admin,coordinador')->group(function () {
-        Route::get('/', function (Request $request) {
-            $query = \App\Models\Auditoria::with('user')
-                ->orderBy('created_at', 'desc');
-
-            if ($request->has('modelo')) {
-                $query->porModelo($request->modelo);
-            }
-
-            if ($request->has('accion')) {
-                $query->porAccion($request->accion);
-            }
-
-            if ($request->has('user_id')) {
-                $query->where('user_id', $request->user_id);
-            }
-
-            if ($request->has('fecha_inicio') && $request->has('fecha_fin')) {
-                $query->whereBetween('created_at', [$request->fecha_inicio, $request->fecha_fin]);
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $query->paginate($request->get('per_page', 15))
-            ]);
-        });
-        Route::get('modelo/{modelo}', function ($modelo, Request $request) {
-            $auditoria = \App\Models\Auditoria::with('user')
-                ->porModelo($modelo)
-                ->when($request->has('modelo_id'), function ($q) use ($request) {
-                    $q->where('modelo_id', $request->modelo_id);
-                })
-                ->orderBy('created_at', 'desc')
-                ->paginate($request->get('per_page', 15));
-
-            return response()->json([
-                'success' => true,
-                'data' => $auditoria
-            ]);
-        });
+        Route::get('/', [\App\Http\Controllers\Api\AuditoriaController::class, 'index']);
+        Route::get('modelo/{modelo}', [\App\Http\Controllers\Api\AuditoriaController::class, 'porModelo']);
+        Route::get('{id}', [\App\Http\Controllers\Api\AuditoriaController::class, 'show']);
     });
 
     // Rutas de dashboard

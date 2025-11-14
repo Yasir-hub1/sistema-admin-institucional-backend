@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Notificacion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class NotificacionController extends Controller
 {
@@ -15,30 +16,67 @@ class NotificacionController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Notificacion::where('user_id', Auth::id())
-                ->orderBy('created_at', 'desc');
+            $userId = Auth::id();
 
-            if ($request->has('leida')) {
-                $query->where('leida', $request->leida === 'true');
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuario no autenticado'
+                ], 401);
             }
 
-            if ($request->has('tipo')) {
+            $query = Notificacion::where('user_id', $userId)
+                ->orderBy('created_at', 'desc');
+
+            // Filtro por leída/no leída
+            if ($request->filled('leida')) {
+                $leida = filter_var($request->leida, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                if ($leida !== null) {
+                    $query->where('leida', $leida);
+                }
+            }
+
+            // Filtro por tipo
+            if ($request->filled('tipo')) {
                 $query->porTipo($request->tipo);
             }
 
-            $notificaciones = $query->paginate($request->get('per_page', 15));
+            // Búsqueda general
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('titulo', 'ILIKE', "%{$search}%")
+                      ->orWhere('mensaje', 'ILIKE', "%{$search}%");
+                });
+            }
+
+            $perPage = $request->get('per_page', 15);
+            $notificaciones = $query->paginate($perPage);
 
             // Contar no leídas
-            $noLeidas = Notificacion::where('user_id', Auth::id())
+            $noLeidas = Notificacion::where('user_id', $userId)
                 ->noLeidas()
                 ->count();
+
+            Log::info('Notificaciones listadas', [
+                'user_id' => $userId,
+                'total' => $notificaciones->total(),
+                'no_leidas' => $noLeidas,
+                'current_page' => $notificaciones->currentPage()
+            ]);
 
             return response()->json([
                 'success' => true,
                 'data' => $notificaciones,
-                'no_leidas' => $noLeidas
+                'no_leidas' => $noLeidas,
+                'message' => 'Notificaciones obtenidas exitosamente'
             ]);
         } catch (\Exception $e) {
+            Log::error('Error al obtener notificaciones', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener notificaciones',

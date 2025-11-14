@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Log;
 
 class Notificacion extends Model
 {
@@ -41,14 +42,46 @@ class Notificacion extends Model
 
     public static function crear($tipo, $titulo, $mensaje, $userId = null, $accionUrl = null, $datosAdicionales = null)
     {
-        return self::create([
-            'user_id' => $userId ?? auth()->id(),
-            'tipo' => $tipo,
-            'titulo' => $titulo,
-            'mensaje' => $mensaje,
-            'accion_url' => $accionUrl,
-            'datos_adicionales' => $datosAdicionales
-        ]);
+        try {
+            $userId = $userId ?? auth()->id();
+
+            if (!$userId) {
+                Log::warning('Notificacion::crear - No se pudo obtener user_id', [
+                    'tipo' => $tipo,
+                    'titulo' => $titulo
+                ]);
+                return null;
+            }
+
+            $notificacion = self::create([
+                'user_id' => $userId,
+                'tipo' => $tipo,
+                'titulo' => $titulo,
+                'mensaje' => $mensaje,
+                'accion_url' => $accionUrl,
+                'leida' => false,
+                'datos_adicionales' => $datosAdicionales
+            ]);
+
+            Log::info('Notificación creada exitosamente', [
+                'id' => $notificacion->id,
+                'user_id' => $userId,
+                'tipo' => $tipo,
+                'titulo' => $titulo
+            ]);
+
+            return $notificacion;
+        } catch (\Exception $e) {
+            $userIdLog = $userId ? $userId : 'null';
+            Log::error('Error al crear notificación', [
+                'error' => $e->getMessage(),
+                'tipo' => $tipo,
+                'titulo' => $titulo,
+                'user_id' => $userIdLog,
+                'trace' => $e->getTraceAsString()
+            ]);
+            return null;
+        }
     }
 
     public function scopeNoLeidas($query)

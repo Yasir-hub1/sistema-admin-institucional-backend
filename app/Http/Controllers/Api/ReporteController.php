@@ -12,6 +12,7 @@ use App\Models\GestionAcademica;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -79,11 +80,108 @@ class ReporteController extends Controller
                 ], 422);
             }
 
-            $asistencias = Asistencia::with(['horario.grupo.materia', 'horario.aula'])
+            // Log de parámetros
+            Log::info('Generando reporte de asistencia', [
+                'docente_id' => $request->docente_id,
+                'fecha_inicio' => $request->fecha_inicio,
+                'fecha_fin' => $request->fecha_fin
+            ]);
+
+            // Cargar todas las relaciones necesarias, incluyendo el nuevo docente del grupo
+            $asistencias = Asistencia::with([
+                'horario.grupo.materia',
+                'horario.grupo.docente.user',  // Docente titular del grupo
+                'horario.aula',
+                'horario.docente.user',
+                'docente.user'
+            ])
                 ->where('docente_id', $request->docente_id)
                 ->whereBetween('fecha', [$request->fecha_inicio, $request->fecha_fin])
                 ->orderBy('fecha', 'desc')
+                ->orderBy('hora_registro', 'desc')
                 ->get();
+
+            Log::info('Asistencias encontradas', [
+                'total' => $asistencias->count(),
+                'primera_asistencia' => $asistencias->first() ? [
+                    'id' => $asistencias->first()->id,
+                    'horario_id' => $asistencias->first()->horario_id,
+                    'tiene_horario' => $asistencias->first()->horario ? 'SI' : 'NO',
+                    'tiene_grupo' => $asistencias->first()->horario && $asistencias->first()->horario->grupo ? 'SI' : 'NO',
+                    'tiene_materia' => $asistencias->first()->horario && $asistencias->first()->horario->grupo && $asistencias->first()->horario->grupo->materia ? 'SI' : 'NO',
+                    'tiene_aula' => $asistencias->first()->horario && $asistencias->first()->horario->aula ? 'SI' : 'NO'
+                ] : null
+            ]);
+
+            // Transformar asistencias para incluir datos formateados
+            $asistenciasTransformadas = $asistencias->map(function ($asistencia) {
+                $horario = $asistencia->horario;
+                $grupo = $horario ? $horario->grupo : null;
+                $materia = $grupo ? $grupo->materia : null;
+                $aula = $horario ? $horario->aula : null;
+
+                // Log de debug por cada asistencia para ver qué falta
+                if (!$horario || !$grupo || !$materia || !$aula) {
+                    Log::warning('Asistencia con datos incompletos', [
+                        'asistencia_id' => $asistencia->id,
+                        'horario_id' => $asistencia->horario_id,
+                        'tiene_horario' => $horario ? 'SI' : 'NO',
+                        'tiene_grupo' => $grupo ? 'SI' : 'NO',
+                        'tiene_materia' => $materia ? 'SI' : 'NO',
+                        'tiene_aula' => $aula ? 'SI' : 'NO'
+                    ]);
+                }
+
+                $materiaTexto = 'N/A';
+                if ($materia) {
+                    $materiaTexto = $materia->nombre;
+                } elseif ($grupo) {
+                    $materiaTexto = 'Grupo sin materia';
+                } elseif ($horario) {
+                    $materiaTexto = 'Horario sin grupo';
+                } else {
+                    $materiaTexto = 'Sin horario asignado';
+                }
+
+                $grupoTexto = 'N/A';
+                if ($grupo) {
+                    $grupoTexto = ($materia ? $materia->sigla : 'MAT') . ' - Grupo ' . $grupo->numero_grupo;
+                } elseif ($horario) {
+                    $grupoTexto = 'Sin grupo asignado';
+                }
+
+                $aulaTexto = 'N/A';
+                if ($aula) {
+                    $aulaTexto = $aula->nombre . ' (' . $aula->codigo_aula . ')';
+                } elseif ($horario) {
+                    $aulaTexto = 'Sin aula asignada';
+                }
+
+                return [
+                    'id' => $asistencia->id,
+                    'fecha' => $asistencia->fecha ? $asistencia->fecha->format('Y-m-d') : null,
+                    'fecha_formateada' => $asistencia->fecha ? $asistencia->fecha->format('d/m/Y') : 'N/A',
+                    'hora_registro' => $asistencia->hora_registro ?
+                        (is_string($asistencia->hora_registro) ? $asistencia->hora_registro : $asistencia->hora_registro->format('H:i:s')) : null,
+                    'hora_registro_formateada' => $asistencia->hora_registro ?
+                        (is_string($asistencia->hora_registro) ? substr($asistencia->hora_registro, 0, 5) : $asistencia->hora_registro->format('H:i')) : 'N/A',
+                    'estado' => $asistencia->estado ?? 'N/A',
+                    'materia' => $materiaTexto,
+                    'grupo' => $grupoTexto,
+                    'aula' => $aulaTexto,
+                    'horario_id' => $horario ? $horario->id : null,
+                    'grupo_id' => $grupo ? $grupo->id : null,
+                    'materia_id' => $materia ? $materia->id : null,
+                    'aula_id' => $aula ? $aula->id : null,
+                    // Info adicional para debug
+                    'debug_info' => [
+                        'tiene_horario' => $horario ? true : false,
+                        'tiene_grupo' => $grupo ? true : false,
+                        'tiene_materia' => $materia ? true : false,
+                        'tiene_aula' => $aula ? true : false
+                    ]
+                ];
+            });
 
             $estadisticas = [
                 'total' => $asistencias->count(),
@@ -107,15 +205,24 @@ class ReporteController extends Controller
                 'success' => true,
                 'data' => [
                     'docente' => $docente,
+                    'docente_nombre' => $docente && $docente->user ? $docente->user->name : 'N/A',
                     'periodo' => [
                         'fecha_inicio' => $request->fecha_inicio,
-                        'fecha_fin' => $request->fecha_fin
+                        'fecha_fin' => $request->fecha_fin,
+                        'fecha_inicio_formateada' => Carbon::parse($request->fecha_inicio)->format('d/m/Y'),
+                        'fecha_fin_formateada' => Carbon::parse($request->fecha_fin)->format('d/m/Y'),
                     ],
                     'estadisticas' => $estadisticas,
-                    'asistencias' => $asistencias
+                    'asistencias' => $asistencias,
+                    'asistencias_transformadas' => $asistenciasTransformadas
                 ]
             ]);
         } catch (\Exception $e) {
+            Log::error('Error en asistenciaDocente', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all()
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Error al generar reporte',
@@ -396,17 +503,73 @@ class ReporteController extends Controller
                     $sheet->setCellValue('F1', 'Hora Registro');
 
                     $row = 2;
-                    if (empty($data['asistencias'])) {
+                    // Usar datos transformados si están disponibles
+                    $asistencias = $data['asistencias_transformadas'] ?? $data['asistencias'] ?? [];
+
+                    if (empty($asistencias)) {
                         $sheet->setCellValue('A' . $row, 'No hay asistencias registradas para este período');
                         $sheet->mergeCells('A' . $row . ':F' . $row);
                     } else {
-                        foreach ($data['asistencias'] as $asistencia) {
-                            $sheet->setCellValue('A' . $row, $asistencia->fecha ?? 'N/A');
-                            $sheet->setCellValue('B' . $row, $asistencia->horario->grupo->materia->nombre ?? 'N/A');
-                            $sheet->setCellValue('C' . $row, $asistencia->horario->grupo->numero_grupo ?? 'N/A');
-                            $sheet->setCellValue('D' . $row, $asistencia->horario->aula->nombre ?? 'N/A');
-                            $sheet->setCellValue('E' . $row, $asistencia->estado ?? 'N/A');
-                            $sheet->setCellValue('F' . $row, $asistencia->hora_registro ?? 'N/A');
+                        foreach ($asistencias as $asistencia) {
+                            // Manejar tanto objetos Eloquent como arrays transformados
+                            if (is_array($asistencia)) {
+                                // Array transformado - preferir este formato
+                                $fecha = $asistencia['fecha_formateada'] ?? 'N/A';
+                                $materia = $asistencia['materia'] ?? 'N/A';
+                                $grupo = $asistencia['grupo'] ?? 'N/A';
+                                $aula = $asistencia['aula'] ?? 'N/A';
+                                $estado = $asistencia['estado'] ?? 'N/A';
+                                $horaRegistro = $asistencia['hora_registro_formateada'] ?? 'N/A';
+                            } else {
+                                // Objeto Eloquent
+                                $fecha = $asistencia->fecha ?
+                                    (is_string($asistencia->fecha) ? $asistencia->fecha : $asistencia->fecha->format('d/m/Y')) : 'N/A';
+
+                                $horaRegistro = 'N/A';
+                                if ($asistencia->hora_registro) {
+                                    if (is_string($asistencia->hora_registro)) {
+                                        $horaRegistro = substr($asistencia->hora_registro, 0, 5);
+                                    } else {
+                                        $horaRegistro = $asistencia->hora_registro->format('H:i');
+                                    }
+                                }
+
+                                // Acceso seguro con mensajes descriptivos
+                                $materia = 'N/A';
+                                if ($asistencia->horario && $asistencia->horario->grupo && $asistencia->horario->grupo->materia) {
+                                    $materia = $asistencia->horario->grupo->materia->nombre;
+                                } elseif ($asistencia->horario && $asistencia->horario->grupo) {
+                                    $materia = 'Grupo sin materia';
+                                } elseif ($asistencia->horario) {
+                                    $materia = 'Horario sin grupo';
+                                } else {
+                                    $materia = 'Sin horario';
+                                }
+
+                                $grupo = 'N/A';
+                                if ($asistencia->horario && $asistencia->horario->grupo) {
+                                    $sigla = $asistencia->horario->grupo->materia ? $asistencia->horario->grupo->materia->sigla : 'MAT';
+                                    $grupo = $sigla . ' - Grupo ' . $asistencia->horario->grupo->numero_grupo;
+                                } elseif ($asistencia->horario) {
+                                    $grupo = 'Sin grupo';
+                                }
+
+                                $aula = 'N/A';
+                                if ($asistencia->horario && $asistencia->horario->aula) {
+                                    $aula = $asistencia->horario->aula->nombre . ' (' . $asistencia->horario->aula->codigo_aula . ')';
+                                } elseif ($asistencia->horario) {
+                                    $aula = 'Sin aula';
+                                }
+
+                                $estado = $asistencia->estado ?? 'N/A';
+                            }
+
+                            $sheet->setCellValue('A' . $row, $fecha);
+                            $sheet->setCellValue('B' . $row, $materia);
+                            $sheet->setCellValue('C' . $row, $grupo);
+                            $sheet->setCellValue('D' . $row, $aula);
+                            $sheet->setCellValue('E' . $row, $estado);
+                            $sheet->setCellValue('F' . $row, $horaRegistro);
                             $row++;
                         }
                     }
@@ -560,9 +723,14 @@ class ReporteController extends Controller
                 break;
 
             case 'asistencias':
+                $docenteNombre = $data['docente_nombre'] ??
+                    (isset($data['docente']) && $data['docente']->user ? $data['docente']->user->name : 'N/A');
+                $fechaInicio = $data['periodo']['fecha_inicio_formateada'] ?? $data['periodo']['fecha_inicio'] ?? 'N/A';
+                $fechaFin = $data['periodo']['fecha_fin_formateada'] ?? $data['periodo']['fecha_fin'] ?? 'N/A';
+
                 $html .= '<div style="margin-bottom: 20px;">
-                    <h2>Docente: ' . ($data['docente']->user->name ?? 'N/A') . '</h2>
-                    <p>Período: ' . $data['periodo']['fecha_inicio'] . ' - ' . $data['periodo']['fecha_fin'] . '</p>
+                    <h2>Docente: ' . htmlspecialchars($docenteNombre) . '</h2>
+                    <p>Período: ' . htmlspecialchars($fechaInicio) . ' - ' . htmlspecialchars($fechaFin) . '</p>
                     <p>Total: ' . $data['estadisticas']['total'] . ' | Presente: ' . $data['estadisticas']['presente'] . ' | Ausente: ' . $data['estadisticas']['ausente'] . '</p>
                     <p>Porcentaje de asistencia: ' . $data['estadisticas']['porcentaje_asistencia'] . '%</p>
                 </div>
@@ -578,17 +746,74 @@ class ReporteController extends Controller
                         </tr>
                     </thead>
                     <tbody>';
-                if (empty($data['asistencias'])) {
+
+                // Usar datos transformados si están disponibles, sino usar asistencias originales
+                $asistencias = $data['asistencias_transformadas'] ?? $data['asistencias'] ?? [];
+
+                if (empty($asistencias)) {
                     $html .= '<tr><td colspan="6" style="text-align: center;">No hay asistencias registradas para este período</td></tr>';
                 } else {
-                    foreach ($data['asistencias'] as $asistencia) {
+                    foreach ($asistencias as $asistencia) {
+                        // Manejar tanto objetos Eloquent como arrays transformados
+                        if (is_array($asistencia)) {
+                            // Array transformado - preferir este formato
+                            $fecha = htmlspecialchars($asistencia['fecha_formateada'] ?? 'N/A');
+                            $materia = htmlspecialchars($asistencia['materia'] ?? 'N/A');
+                            $grupo = htmlspecialchars($asistencia['grupo'] ?? 'N/A');
+                            $aula = htmlspecialchars($asistencia['aula'] ?? 'N/A');
+                            $estado = ucfirst($asistencia['estado'] ?? 'N/A');
+                            $horaRegistro = htmlspecialchars($asistencia['hora_registro_formateada'] ?? 'N/A');
+                        } else {
+                            // Objeto Eloquent
+                            $fecha = $asistencia->fecha ?
+                                (is_string($asistencia->fecha) ? $asistencia->fecha : $asistencia->fecha->format('d/m/Y')) : 'N/A';
+
+                            $horaRegistro = 'N/A';
+                            if ($asistencia->hora_registro) {
+                                if (is_string($asistencia->hora_registro)) {
+                                    $horaRegistro = substr($asistencia->hora_registro, 0, 5);
+                                } else {
+                                    $horaRegistro = $asistencia->hora_registro->format('H:i');
+                                }
+                            }
+
+                            // Acceso seguro a relaciones anidadas con mensajes descriptivos
+                            $materia = 'N/A';
+                            if ($asistencia->horario && $asistencia->horario->grupo && $asistencia->horario->grupo->materia) {
+                                $materia = htmlspecialchars($asistencia->horario->grupo->materia->nombre);
+                            } elseif ($asistencia->horario && $asistencia->horario->grupo) {
+                                $materia = 'Grupo sin materia';
+                            } elseif ($asistencia->horario) {
+                                $materia = 'Horario sin grupo';
+                            } else {
+                                $materia = 'Sin horario';
+                            }
+
+                            $grupo = 'N/A';
+                            if ($asistencia->horario && $asistencia->horario->grupo) {
+                                $sigla = $asistencia->horario->grupo->materia ? $asistencia->horario->grupo->materia->sigla : 'MAT';
+                                $grupo = htmlspecialchars($sigla . ' - Grupo ' . $asistencia->horario->grupo->numero_grupo);
+                            } elseif ($asistencia->horario) {
+                                $grupo = 'Sin grupo';
+                            }
+
+                            $aula = 'N/A';
+                            if ($asistencia->horario && $asistencia->horario->aula) {
+                                $aula = htmlspecialchars($asistencia->horario->aula->nombre . ' (' . $asistencia->horario->aula->codigo_aula . ')');
+                            } elseif ($asistencia->horario) {
+                                $aula = 'Sin aula';
+                            }
+
+                            $estado = ucfirst($asistencia->estado ?? 'N/A');
+                        }
+
                         $html .= '<tr>
-                            <td>' . ($asistencia->fecha ?? 'N/A') . '</td>
-                            <td>' . ($asistencia->horario->grupo->materia->nombre ?? 'N/A') . '</td>
-                            <td>' . ($asistencia->horario->grupo->numero_grupo ?? 'N/A') . '</td>
-                            <td>' . ($asistencia->horario->aula->nombre ?? 'N/A') . '</td>
-                            <td>' . ucfirst($asistencia->estado ?? 'N/A') . '</td>
-                            <td>' . ($asistencia->hora_registro ?? 'N/A') . '</td>
+                            <td>' . $fecha . '</td>
+                            <td>' . $materia . '</td>
+                            <td>' . $grupo . '</td>
+                            <td>' . $aula . '</td>
+                            <td>' . $estado . '</td>
+                            <td>' . $horaRegistro . '</td>
                         </tr>';
                     }
                 }

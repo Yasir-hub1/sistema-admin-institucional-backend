@@ -280,11 +280,24 @@ class GestionAcademicaController extends Controller
             }
 
             $gestion->update($requestData);
+            $gestion->refresh();
+
+            // Notificar al coordinador/admin que actualizó la gestión
+            if (Auth::user()) {
+                $nombreGestion = $gestion->nombre ?? ($gestion->año . ' - Periodo ' . $gestion->periodo);
+                Notificacion::crear(
+                    'info',
+                    'Gestión académica actualizada',
+                    "Se ha actualizado la gestión académica: {$nombreGestion}",
+                    Auth::id(),
+                    "/gestiones-academicas/{$gestion->id}"
+                );
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Gestión académica actualizada exitosamente',
-                'data' => $gestion->fresh()
+                'data' => $gestion
             ]);
         } catch (\Exception $e) {
             Log::error('GestionAcademicaController@update - Error', [

@@ -5,12 +5,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\Auditable;
 
 class Grupo extends Model
 {
+    use Auditable;
     protected $fillable = [
         'materia_id',
         'gestion_id',
+        'docente_id',
         'numero_grupo',
         'cupo_maximo'
     ];
@@ -29,6 +32,14 @@ class Grupo extends Model
     public function gestion(): BelongsTo
     {
         return $this->belongsTo(GestionAcademica::class, 'gestion_id');
+    }
+
+    /**
+     * Relación con docente (docente titular del grupo)
+     */
+    public function docente(): BelongsTo
+    {
+        return $this->belongsTo(Docente::class);
     }
 
     /**

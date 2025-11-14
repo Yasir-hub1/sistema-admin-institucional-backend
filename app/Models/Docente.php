@@ -5,9 +5,11 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\Auditable;
 
 class Docente extends Model
 {
+    use Auditable;
     protected $fillable = [
         'user_id',
         'codigo_docente',
@@ -29,6 +31,14 @@ class Docente extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Relación con grupos (grupos donde es docente titular)
+     */
+    public function grupos(): HasMany
+    {
+        return $this->hasMany(Grupo::class);
     }
 
     /**

@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Grupo;
 use App\Models\GestionAcademica;
+use App\Models\Notificacion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Auth;
 
 class GrupoController extends Controller
 {
@@ -16,7 +18,7 @@ class GrupoController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Grupo::with(['materia', 'gestion']);
+            $query = Grupo::with(['materia', 'gestion', 'docente.user']);
 
             // Filtro por búsqueda
             if ($request->has('search')) {
@@ -65,20 +67,22 @@ class GrupoController extends Controller
                     'id' => $grupo->id,
                     'materia_id' => $grupo->materia_id,
                     'gestion_id' => $grupo->gestion_id,
+                    'docente_id' => $grupo->docente_id,
                     'numero_grupo' => $grupo->numero_grupo,
                     'cupo_maximo' => $grupo->cupo_maximo,
                     'nombre' => $grupo->materia ? ($grupo->materia->sigla . ' - Grupo ' . $grupo->numero_grupo) : 'Grupo ' . $grupo->numero_grupo,
                     'codigo' => $grupo->materia ? ($grupo->materia->codigo_materia . '-G' . $grupo->numero_grupo) : 'G' . $grupo->numero_grupo,
                     'materia' => $grupo->materia ? $grupo->materia->nombre : 'N/A',
                     'gestion' => $grupo->gestion ? $grupo->gestion->nombre : 'N/A',
-                    'docente' => 'Por asignar', // Se asigna después con horarios
+                    'docente' => $grupo->docente && $grupo->docente->user ? $grupo->docente->user->name : 'Por asignar',
                     'estudiantes' => 0, // Se calcula con inscripciones
                     'estado' => 'activo', // Por defecto activo
                     'created_at' => $grupo->created_at,
                     'updated_at' => $grupo->updated_at,
                     // Relaciones completas para otros usos
                     'materia_obj' => $grupo->materia,
-                    'gestion_obj' => $grupo->gestion
+                    'gestion_obj' => $grupo->gestion,
+                    'docente_obj' => $grupo->docente
                 ];
             });
 
@@ -134,6 +138,7 @@ class GrupoController extends Controller
             $validator = Validator::make($request->all(), [
                 'materia_id' => 'required|exists:materias,id',
                 'gestion_id' => 'required|exists:gestiones_academicas,id',
+                'docente_id' => 'nullable|exists:docentes,id',
                 'numero_grupo' => 'required|integer|min:1',
                 'cupo_maximo' => 'required|integer|min:1|max:100'
             ], [
@@ -141,6 +146,7 @@ class GrupoController extends Controller
                 'materia_id.exists' => 'La materia seleccionada no existe',
                 'gestion_id.required' => 'La gestión académica es obligatoria',
                 'gestion_id.exists' => 'La gestión académica no existe',
+                'docente_id.exists' => 'El docente seleccionado no existe',
                 'numero_grupo.required' => 'El número de grupo es obligatorio',
                 'cupo_maximo.required' => 'El cupo máximo es obligatorio'
             ]);
@@ -168,6 +174,18 @@ class GrupoController extends Controller
 
             $grupo = Grupo::create($request->all());
             $grupo->load(['materia', 'gestion']);
+
+            // Notificar al coordinador/admin que creó el grupo
+            if (Auth::user()) {
+                $materiaNombre = $grupo->materia ? $grupo->materia->nombre : 'N/A';
+                Notificacion::crear(
+                    'info',
+                    'Grupo creado',
+                    "Se ha creado el grupo {$materiaNombre} - Grupo {$grupo->numero_grupo}",
+                    Auth::id(),
+                    "/grupos/{$grupo->id}"
+                );
+            }
 
             return response()->json([
                 'success' => true,

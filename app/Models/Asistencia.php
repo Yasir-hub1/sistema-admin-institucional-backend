@@ -4,9 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Traits\Auditable;
 
 class Asistencia extends Model
 {
+    use Auditable;
     protected $fillable = [
         'horario_id',
         'docente_id',

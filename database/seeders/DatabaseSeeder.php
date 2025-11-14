@@ -23,6 +23,7 @@ class DatabaseSeeder extends Seeder
             MateriaSeeder::class,
             AulaSeeder::class,
             DocenteSeeder::class,
+            NotificacionSeeder::class,
         ]);
     }
 }

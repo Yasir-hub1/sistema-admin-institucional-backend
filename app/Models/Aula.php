@@ -4,9 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\Auditable;
 
 class Aula extends Model
 {
+    use Auditable;
     protected $fillable = [
         'codigo_aula',
         'nombre',
