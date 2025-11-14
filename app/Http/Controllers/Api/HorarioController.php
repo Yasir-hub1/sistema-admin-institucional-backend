@@ -24,29 +24,29 @@ class HorarioController extends Controller
         $query = Horario::with(['grupo.materia', 'docente.user', 'aula']);
 
         // Filtros
-        if ($request->has('docente_id')) {
+        if ($request->has('docente_id') && !empty($request->docente_id)) {
             $query->where('docente_id', $request->docente_id);
         }
 
-        if ($request->has('aula_id')) {
+        if ($request->has('aula_id') && !empty($request->aula_id)) {
             $query->where('aula_id', $request->aula_id);
         }
 
-        if ($request->has('grupo_id')) {
+        if ($request->has('grupo_id') && !empty($request->grupo_id)) {
             $query->where('grupo_id', $request->grupo_id);
         }
 
-        if ($request->has('dia_semana')) {
+        if ($request->has('dia_semana') && !empty($request->dia_semana)) {
             $query->where('dia_semana', $request->dia_semana);
         }
 
-        if ($request->has('gestion_id')) {
+        if ($request->has('gestion_id') && !empty($request->gestion_id)) {
             $query->whereHas('grupo', function ($q) use ($request) {
                 $q->where('gestion_id', $request->gestion_id);
             });
         }
 
-        if ($request->has('materia_id')) {
+        if ($request->has('materia_id') && !empty($request->materia_id)) {
             $query->whereHas('grupo', function ($q) use ($request) {
                 $q->where('materia_id', $request->materia_id);
             });
@@ -55,6 +55,64 @@ class HorarioController extends Controller
         $horarios = $query->orderBy('dia_semana')
                          ->orderBy('hora_inicio')
                          ->paginate($request->get('per_page', 15));
+
+        // Transformar los datos para incluir campos calculados
+        $horarios->getCollection()->transform(function ($horario) {
+            $diasSemana = [
+                1 => 'Lunes',
+                2 => 'Martes',
+                3 => 'Miércoles',
+                4 => 'Jueves',
+                5 => 'Viernes',
+                6 => 'Sábado',
+                7 => 'Domingo'
+            ];
+
+            // Formatear horas a HH:mm
+            $horaInicio = $horario->hora_inicio;
+            $horaFin = $horario->hora_fin;
+
+            // Si vienen como timestamp completo, extraer solo la hora
+            if (strlen($horaInicio) > 8) {
+                $horaInicio = date('H:i', strtotime($horaInicio));
+            }
+            if (strlen($horaFin) > 8) {
+                $horaFin = date('H:i', strtotime($horaFin));
+            }
+
+            return [
+                'id' => $horario->id,
+                'grupo_id' => $horario->grupo_id,
+                'docente_id' => $horario->docente_id,
+                'aula_id' => $horario->aula_id,
+                'dia_semana' => $horario->dia_semana,
+                'hora_inicio' => $horaInicio,
+                'hora_fin' => $horaFin,
+                // Campos calculados para el frontend
+                'docente' => $horario->docente && $horario->docente->user
+                    ? $horario->docente->user->name
+                    : 'Sin asignar',
+                'materia' => $horario->grupo && $horario->grupo->materia
+                    ? $horario->grupo->materia->nombre
+                    : 'N/A',
+                'grupo' => $horario->grupo && $horario->grupo->materia
+                    ? ($horario->grupo->materia->sigla . ' - Grupo ' . $horario->grupo->numero_grupo)
+                    : 'N/A',
+                'aula' => $horario->aula
+                    ? ($horario->aula->codigo_aula . ' - ' . $horario->aula->nombre)
+                    : 'N/A',
+                'dia' => $diasSemana[$horario->dia_semana] ?? 'N/A',
+                'estudiantes_inscritos' => 0, // TODO: calcular con inscripciones
+                'capacidad' => $horario->aula ? $horario->aula->capacidad : 0,
+                'estado' => 'activo', // Por defecto activo
+                'created_at' => $horario->created_at,
+                'updated_at' => $horario->updated_at,
+                // Relaciones completas
+                'grupo_obj' => $horario->grupo,
+                'docente_obj' => $horario->docente,
+                'aula_obj' => $horario->aula
+            ];
+        });
 
         return response()->json([
             'success' => true,

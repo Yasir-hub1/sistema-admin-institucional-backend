@@ -18,9 +18,36 @@ class Horario extends Model
     ];
 
     protected $casts = [
-        'hora_inicio' => 'datetime:H:i',
-        'hora_fin' => 'datetime:H:i'
+        'dia_semana' => 'integer'
     ];
+
+    /**
+     * Accessor para formatear hora_inicio
+     */
+    public function getHoraInicioAttribute($value)
+    {
+        if (!$value) return null;
+        // Si viene como timestamp completo, extraer solo la hora
+        if (strlen($value) > 8) {
+            return date('H:i', strtotime($value));
+        }
+        // Si ya viene en formato HH:mm:ss, tomar solo HH:mm
+        return substr($value, 0, 5);
+    }
+
+    /**
+     * Accessor para formatear hora_fin
+     */
+    public function getHoraFinAttribute($value)
+    {
+        if (!$value) return null;
+        // Si viene como timestamp completo, extraer solo la hora
+        if (strlen($value) > 8) {
+            return date('H:i', strtotime($value));
+        }
+        // Si ya viene en formato HH:mm:ss, tomar solo HH:mm
+        return substr($value, 0, 5);
+    }
 
     /**
      * Relación con grupo

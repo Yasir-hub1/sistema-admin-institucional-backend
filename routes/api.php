@@ -127,10 +127,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/', [GestionAcademicaController::class, 'index']);
         Route::get('activa', [GestionAcademicaController::class, 'activa']);
         Route::post('/', [GestionAcademicaController::class, 'store'])->middleware('role:admin,coordinador');
+        // Rutas específicas deben ir ANTES de las rutas con {id}
+        Route::put('{id}/activar', [GestionAcademicaController::class, 'activar'])->middleware('role:admin,coordinador');
+        Route::put('{id}/toggle-estado', [GestionAcademicaController::class, 'toggleEstado'])->middleware('role:admin,coordinador');
+        // Rutas con {id} al final
         Route::get('{id}', [GestionAcademicaController::class, 'show']);
         Route::put('{id}', [GestionAcademicaController::class, 'update'])->middleware('role:admin,coordinador');
         Route::delete('{id}', [GestionAcademicaController::class, 'destroy'])->middleware('role:admin');
-        Route::put('{id}/activar', [GestionAcademicaController::class, 'activar'])->middleware('role:admin,coordinador');
     });
 
     // Rutas de roles

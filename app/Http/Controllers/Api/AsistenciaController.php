@@ -10,6 +10,7 @@ use App\Models\Notificacion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use Carbon\Carbon;
 
@@ -21,47 +22,127 @@ class AsistenciaController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Asistencia::with(['horario.grupo.materia', 'horario.aula', 'docente.user', 'registradoPor']);
+            $query = Asistencia::with(['horario.grupo.materia', 'horario.aula', 'horario.docente.user', 'docente.user', 'registradoPor']);
 
             // Filtro por fecha
-            if ($request->has('fecha')) {
+            if ($request->filled('fecha')) {
                 $query->porFecha($request->fecha);
             }
 
             // Filtro por rango de fechas
-            if ($request->has('fecha_inicio') && $request->has('fecha_fin')) {
+            if ($request->filled('fecha_inicio') && $request->filled('fecha_fin')) {
                 $query->porRangoFechas($request->fecha_inicio, $request->fecha_fin);
             }
 
             // Filtro por estado
-            if ($request->has('estado')) {
+            if ($request->filled('estado')) {
                 $query->porEstado($request->estado);
             }
 
             // Filtro por docente
-            if ($request->has('docente_id')) {
+            if ($request->filled('docente_id')) {
                 $query->deDocente($request->docente_id);
             }
 
             // Filtro por horario
-            if ($request->has('horario_id')) {
+            if ($request->filled('horario_id')) {
                 $query->where('horario_id', $request->horario_id);
+            }
+
+            // Filtro por búsqueda general
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->whereHas('docente.user', function ($q) use ($search) {
+                        $q->where('name', 'ILIKE', "%{$search}%");
+                    })
+                    ->orWhereHas('horario.grupo.materia', function ($q) use ($search) {
+                        $q->where('nombre', 'ILIKE', "%{$search}%");
+                    })
+                    ->orWhere('estado', 'ILIKE', "%{$search}%")
+                    ->orWhere('fecha', 'ILIKE', "%{$search}%");
+                });
             }
 
             // Ordenamiento
             $sortBy = $request->get('sort_by', 'fecha');
-            $sortOrder = $request->get('sort_order', 'desc');
-            $query->orderBy($sortBy, $sortOrder);
+            $sortDirection = $request->get('sort_direction', $request->get('sort_order', 'desc'));
+            $query->orderBy($sortBy, $sortDirection);
 
             // Paginación
             $perPage = $request->get('per_page', 15);
             $asistencias = $query->paginate($perPage);
 
+            // Transformar datos para el frontend
+            $asistencias->getCollection()->transform(function ($asistencia) {
+                // Formatear hora_inicio y hora_fin si vienen del horario
+                $horaInicio = $asistencia->horario ? $asistencia->horario->hora_inicio : 'N/A';
+                $horaFin = $asistencia->horario ? $asistencia->horario->hora_fin : 'N/A';
+
+                // Si vienen como timestamp completo, extraer solo la hora
+                if (is_string($horaInicio) && strlen($horaInicio) > 8) {
+                    $horaInicio = date('H:i', strtotime($horaInicio));
+                }
+                if (is_string($horaFin) && strlen($horaFin) > 8) {
+                    $horaFin = date('H:i', strtotime($horaFin));
+                }
+
+                return [
+                    'id' => $asistencia->id,
+                    'horario_id' => $asistencia->horario_id,
+                    'docente_id' => $asistencia->docente_id,
+                    'fecha' => $asistencia->fecha,
+                    'hora_registro' => $asistencia->hora_registro,
+                    'estado' => $asistencia->estado,
+                    'metodo_registro' => $asistencia->metodo_registro,
+                    'observaciones' => $asistencia->observaciones,
+                    // Campos calculados para el frontend
+                    'docente' => $asistencia->docente && $asistencia->docente->user
+                        ? $asistencia->docente->user->name
+                        : ($asistencia->horario && $asistencia->horario->docente && $asistencia->horario->docente->user
+                            ? $asistencia->horario->docente->user->name
+                            : 'N/A'),
+                    'materia' => $asistencia->horario && $asistencia->horario->grupo && $asistencia->horario->grupo->materia
+                        ? $asistencia->horario->grupo->materia->nombre
+                        : 'N/A',
+                    'grupo' => $asistencia->horario && $asistencia->horario->grupo
+                        ? $asistencia->horario->grupo->numero_grupo
+                        : 'N/A',
+                    'aula' => $asistencia->horario && $asistencia->horario->aula
+                        ? $asistencia->horario->aula->nombre
+                        : 'N/A',
+                    'hora_inicio' => $horaInicio,
+                    'hora_fin' => $horaFin,
+                    'estudiantes_presentes' => 0, // TODO: calcular con inscripciones
+                    'estudiantes_totales' => 0, // TODO: calcular con inscripciones
+                    'porcentaje_asistencia' => 0, // TODO: calcular con inscripciones
+                    'created_at' => $asistencia->created_at,
+                    'updated_at' => $asistencia->updated_at,
+                    // Relaciones completas para uso en modales
+                    'horario' => $asistencia->horario,
+                    'docente_obj' => $asistencia->docente,
+                    'registrado_por_obj' => $asistencia->registradoPor
+                ];
+            });
+
+            Log::info('Asistencias listadas', [
+                'total' => $asistencias->total(),
+                'per_page' => $asistencias->perPage(),
+                'current_page' => $asistencias->currentPage(),
+                'last_page' => $asistencias->lastPage()
+            ]);
+
             return response()->json([
                 'success' => true,
-                'data' => $asistencias
+                'data' => $asistencias,
+                'message' => 'Asistencias obtenidas exitosamente'
             ]);
         } catch (\Exception $e) {
+            Log::error('Error al listar asistencias', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener las asistencias',

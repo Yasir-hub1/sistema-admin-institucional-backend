@@ -41,14 +41,46 @@ class GrupoController extends Controller
                 $query->deGestionActiva();
             }
 
-            // Ordenamiento
+            // Ordenamiento - validar columnas permitidas
             $sortBy = $request->get('sort_by', 'id');
             $sortOrder = $request->get('sort_order', 'desc');
+
+            // Columnas válidas para ordenar
+            $allowedSortColumns = ['id', 'materia_id', 'gestion_id', 'numero_grupo', 'cupo_maximo', 'created_at', 'updated_at'];
+
+            // Si la columna no es válida, usar 'id' por defecto
+            if (!in_array($sortBy, $allowedSortColumns)) {
+                $sortBy = 'id';
+            }
+
             $query->orderBy($sortBy, $sortOrder);
 
             // Paginación
             $perPage = $request->get('per_page', 15);
             $grupos = $query->paginate($perPage);
+
+            // Transformar los datos para incluir campos calculados
+            $grupos->getCollection()->transform(function ($grupo) {
+                return [
+                    'id' => $grupo->id,
+                    'materia_id' => $grupo->materia_id,
+                    'gestion_id' => $grupo->gestion_id,
+                    'numero_grupo' => $grupo->numero_grupo,
+                    'cupo_maximo' => $grupo->cupo_maximo,
+                    'nombre' => $grupo->materia ? ($grupo->materia->sigla . ' - Grupo ' . $grupo->numero_grupo) : 'Grupo ' . $grupo->numero_grupo,
+                    'codigo' => $grupo->materia ? ($grupo->materia->codigo_materia . '-G' . $grupo->numero_grupo) : 'G' . $grupo->numero_grupo,
+                    'materia' => $grupo->materia ? $grupo->materia->nombre : 'N/A',
+                    'gestion' => $grupo->gestion ? $grupo->gestion->nombre : 'N/A',
+                    'docente' => 'Por asignar', // Se asigna después con horarios
+                    'estudiantes' => 0, // Se calcula con inscripciones
+                    'estado' => 'activo', // Por defecto activo
+                    'created_at' => $grupo->created_at,
+                    'updated_at' => $grupo->updated_at,
+                    // Relaciones completas para otros usos
+                    'materia_obj' => $grupo->materia,
+                    'gestion_obj' => $grupo->gestion
+                ];
+            });
 
             return response()->json([
                 'success' => true,
